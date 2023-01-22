@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "static-code-analyzer"
+version = "0.1.0"
+description = ""
+authors = ["eertree <baskirill.an@gmail.com>"]
+readme = "README.md"
+packages = [{include = "static_code_analyzer"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
