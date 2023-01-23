@@ -1,6 +1,8 @@
-import typing
 import logging
 import logging.config
+import os.path
+import sys
+import typing
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
 from typing import List
@@ -57,7 +59,7 @@ class IssueCodes:
     UNNECESSARY_SEMICOLON_ISSUE = IssueCode("S003",
                                             "Unnecessary semicolon")
     AT_LEAST_2_SPACES_BEFORE_INLINE_COMMENT_ISSUE = IssueCode("S004",
-                                                               "At least two spaces required before inline comments")
+                                                              "At least two spaces required before inline comments")
     TODO_FOUND_ISSUE = IssueCode("S005", "TODO found")
     MORE_TWO_BLANK_LINES_PRECEDING_CODE_LINE_ISSUE = IssueCode("S006",
                                                                "More than two blank lines used before this line")
@@ -163,18 +165,6 @@ def set_up_logger():
     logging.debug(f"Logging was initialized from {LOGGING_CONFIG}")
 
 
-def open_python_file():
-    path_to_file = input()
-    try:
-        file = open(path_to_file)
-        logging.debug(f"File {path_to_file} opened")
-    except FileNotFoundError:
-        print("Can not open the file")
-        exit(1)
-    else:
-        return file
-
-
 def init_rules() -> typing.List[PEP8Rule]:
     return [
         MaxLineLength(),
@@ -186,10 +176,18 @@ def init_rules() -> typing.List[PEP8Rule]:
     ]
 
 
-def main():
-    # set_up_logger()
-    file = open_python_file()
-    rules = init_rules()
+def open_python_file(path_to_file):
+    try:
+        file = open(path_to_file)
+        logging.debug(f"File {path_to_file} opened")
+    except FileNotFoundError:
+        print("Can not open the file")
+        exit(1)
+    else:
+        return file
+
+
+def check_file(file, rules):
     lines = []
     for pos, content in enumerate(file, start=1):
         content = content.rstrip()  # remove '\n'
@@ -211,11 +209,39 @@ def main():
 
         errors.sort(key=lambda e: e.code)
         for error in errors:
-            print(f"Line {pos}: {error.code} {error.description}")
+            print(f"{file.name}: Line {pos}: {error.code} {error.description}")
 
         lines.append(line)
     logging.info("Lines processed.")
     file.close()
+
+
+def scan_python_file(path):
+    files = []
+    if os.path.isfile(path):
+        files.append(path)
+    elif os.path.isdir(path):
+        logging.debug("Scanning directories...")
+        files.extend([
+            os.path.join(dirpath, file)
+            for dirpath, _, files in os.walk(path)
+            for file in files
+            if file.endswith(".py")
+        ])
+    files.sort()
+    return files
+
+
+def main():
+    # set_up_logger()
+    logging.debug(sys.argv)
+    path = sys.argv[1]
+    files = scan_python_file(path)
+    logging.info(f"Found {len(files)} files: {files}")
+    rules = init_rules()
+    for file in files:
+        file = open_python_file(file)
+        check_file(file, rules)
 
 
 main()
