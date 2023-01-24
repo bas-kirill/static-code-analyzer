@@ -1,3 +1,4 @@
+import ast
 import logging
 import logging.config
 import os.path
@@ -42,9 +43,9 @@ class LineFormatter:
         return new_line
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, order=True)
 class IssueCode:
-    code: str
+    code: str = field(compare=True)
     description: str
 
     def __getitem__(self, item):
@@ -71,6 +72,19 @@ class IssueCodes:
                                          "Class name class_name should be written in CamelCase")
     FUNCTION_NAME_IN_SNAKE_CASE = IssueCode("S009",
                                             "Function name function_name should be written in snake_case")
+    ARGUMENT_NAME_SNAKE_CASE = IssueCode("S010",
+                                         "Argument name arg_name should be written in snake_case")
+    VARIABLE_NAME_SNAKE_CASE = IssueCode("S011",
+                                         "Variable var_name should be written in snake_case")
+    DEFAULT_ARGUMENT_MUTABLE = IssueCode("S012",
+                                         "The default argument value is mutable")
+
+
+@dataclass(frozen=True, order=True)
+class Issue:
+    file_name: str = field(compare=True)
+    pos: int = field(compare=True)
+    code: IssueCode = field(compare=True)
 
 
 class PEP8Rule(ABC):
@@ -263,7 +277,7 @@ def set_up_logger():
     logging.debug(f"Logging was initialized from {LOGGING_CONFIG}")
 
 
-def init_rules() -> typing.List[PEP8Rule]:
+def line_by_line_rules() -> typing.List[PEP8Rule]:
     return [
         MaxLineLength(),
         IndentationMultipleOfFour(),
@@ -289,32 +303,29 @@ def open_python_file(path_to_file):
         return file
 
 
-def check_file(file, rules, lines):
-    for pos, content in enumerate(file, start=1):
+def check_file_line_by_line(file_name, file, rules) -> typing.List[Issue]:
+    lines = file.split('\n')
+    prev_lines, issues = [], []
+    for pos, content in enumerate(lines, start=1):
         content = content.rstrip()  # remove '\n'
         logging.info(f"Processing line at pos {pos} with content: {content}")
         line = Line(pos, content)
-        errors = []
         for rule in rules:
             if isinstance(rule, MoreThanTwoBlankLinesPrecedingCodeLine):
                 if content == "":
                     continue
-                rule.set_prev_lines(lines)
+                rule.set_prev_lines(prev_lines)
 
             logging.debug(f"Trying to apply rule {rule}.")
             error = rule.check(line)
 
             if error != IssueCodes.DUMMY:
                 logging.debug(f"{error.description} was added to errors list.")
-                errors.append(error)
+                issues.append(Issue(file_name, pos, error))
 
-        errors.sort(key=lambda e: e.code)
-        for error in errors:
-            print(f"{file.name}: Line {pos}: {error.code} {error.description}")
-
-        lines.append(line)
+        prev_lines.append(line)
     logging.info("Lines processed.")
-    file.close()
+    return issues
 
 
 def scan_python_file(path):
@@ -333,17 +344,62 @@ def scan_python_file(path):
     return files
 
 
+def is_arg_snake_case(arg: str):
+    arg_template = r"[a-z]+(_[a-z]+)*"
+    is_snake_case = re.match(arg_template, arg) is not None
+    return is_snake_case
+
+
 def main():
     # set_up_logger()
     logging.debug(sys.argv)
     path = sys.argv[1]
     files = scan_python_file(path)
     logging.info(f"Found {len(files)} files: {files}")
-    rules = init_rules()
-    for file in files:
-        file = open_python_file(file)
-        processed_lines = []
-        check_file(file, rules, processed_lines)
+    lbl_rules = line_by_line_rules()
+    for file_name in files:
+        file = open_python_file(file_name)
+        file_content = file.read()
+        issues = []
+        issues.extend(check_file_line_by_line(file_name, file_content, lbl_rules))
+
+        # ---
+
+        tree = ast.parse(file_content)
+        nodes = ast.walk(tree)
+        for node in nodes:
+            if type(node) != ast.FunctionDef:
+                continue
+
+            # check for S010
+            for arg in node.args.args:
+                arg_name = arg.arg
+                if not is_arg_snake_case(arg_name):
+                    issues.append(Issue(file_name, arg.lineno, IssueCodes.ARGUMENT_NAME_SNAKE_CASE))
+
+            # check for S011
+            for ast_object in node.body:
+                if type(ast_object) == ast.Assign and \
+                    type(ast_object.targets) == list and \
+                    len(ast_object.targets) == 1 and \
+                    type(ast_object.targets[0]) == ast.Name:
+
+                    var_id = ast_object.targets[0].id
+                    if not is_arg_snake_case(var_id):
+                        issues.append(Issue(file_name, ast_object.lineno, IssueCodes.VARIABLE_NAME_SNAKE_CASE))
+
+            # check for S012
+            has_mutable, idx = False, -1
+            for default in node.args.defaults:
+                if type(default) == ast.List or type(default) == ast.Dict or type(default) == ast.Set:
+                    has_mutable = True
+                    idx = default.lineno
+            if has_mutable:
+                issues.append(Issue(file_name, idx, IssueCodes.DEFAULT_ARGUMENT_MUTABLE))
+
+        issues.sort(key=lambda i: (i.file_name, i.pos, i.code.code))
+        for issue in issues:
+            print(f"{issue.file_name}: Line {issue.pos}: {issue.code.code} {issue.code.description}")
 
 
 main()
